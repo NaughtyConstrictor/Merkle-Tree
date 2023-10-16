@@ -5,11 +5,12 @@ from typing import NoReturn
 from queue import Queue
 
 class _MerkleNode:
+    
     def __init__(
         self, value: str | None = None, *, 
         left: _MerkleNode | None = None, 
         right: _MerkleNode | None = None
-        ):
+        ) -> None:
         if value is not None and not (left is None and right is None):
             raise ValueError("Can't provide both value and left or right")
 
@@ -25,7 +26,7 @@ class _MerkleNode:
             value = [value]
         self.value = value
 
-    def __eq__(self, other):
+    def __eq__(self, other: object) -> bool:
         if type(other) is not type(self):
             return NotImplemented
 
@@ -38,13 +39,21 @@ class _MerkleNode:
     def hash(self) -> str:
         return self._hash.hexdigest()
 
-    def __repr__(self):
+    def __repr__(self) -> str:
         return f"{self.value}: {self.hash}"
 
-class _NO_ROOT:
+class _NO_ROOT(_MerkleNode):
     
-    def __str__(self):
-        return "<Empty tree: Not root>"
+    def __init__(self) -> None:
+        pass
+
+    @property
+    def left(self) -> NoReturn:
+        raise AttributeError("Empty tree: root has no children")
+    
+    @property
+    def right(self) -> NoReturn:
+        raise AttributeError("Empty tree: root has no children")
 
     @property
     def value(self) -> NoReturn:
@@ -54,15 +63,23 @@ class _NO_ROOT:
     def hash(self) -> NoReturn:
         raise AttributeError("Empty tree: root does not exist")
 
+    def __str__(self) -> str:
+        return "<Empty tree: Not root>"
+
+    def __eq__(self, other: object) -> bool:
+        if type(other) is type(self):
+            return True
+        return NotImplemented
 
 class MerkleTree:
 
     NO_ROOT = _NO_ROOT()
 
-    def __init__(self, blocks: list[str]):
-        self.blocks = blocks
+    def __init__(self, blocks: list[str]) -> None:
+        self.blocks = [sha256(block.encode("utf-8")).digest() for block in blocks]
         self.root = self.NO_ROOT
-        self._build_tree([_MerkleNode(block) for block in self.blocks])
+        self._levels = 0
+        self._build_tree([_MerkleNode(block) for block in blocks])
 
     @property
     def nodes(self) -> list[list[_MerkleNode]]:
@@ -104,4 +121,39 @@ class MerkleTree:
         for left_child, right_child in zip_longest(*children):
             parent = _MerkleNode(left=left_child, right=right_child)
             parents.append(parent)
+        self._levels += 1
         return self._build_tree(parents)
+
+    def _index(self, value: str) -> int:
+        try:
+            return self.blocks.index(sha256(value.encode("utf-8")).digest())
+        except ValueError:
+            return -1
+    
+    def __contains__(self, value: str) -> bool:
+        return bool(self._index(value) + 1)
+    
+    def proof(self, value: str, *, return_positions: bool = False
+    )-> list[bytes] | tuple[list[bytes], list[int]]:
+        position = self._index(value)
+        if self._levels == 0 or position == -1:
+            if return_positions:
+                return [], []
+            return []
+
+        positions = bin(position)[2:].zfill(self._levels)
+        path = []
+        node = self.root
+        for position in positions:
+            if position == "1":
+                path.append(node.left._hash.digest())
+                node = node.right
+            else:
+                path.append(node.right._hash.digest())
+                node = node.left
+        
+        path = path[::-1]
+        if return_positions:
+            positions = [int(position) for position in reversed(positions)]
+            return path, positions
+        return path
